@@ -12,43 +12,6 @@ logging.basicConfig(
     ]
 )
 
-def leer_todos_csv(ruta_directorio: Path) -> dict:
-    """
-    Lee archivos CSV que coinciden con un patrón dentro de un directorio.
-    Retorna un diccionario de DataFrames.
-    """
-    dataframes = {}
-    
-    # Verificación de existencia de la ruta
-    if not ruta_directorio.exists():
-        logging.error(f"La ruta '{ruta_directorio}' no existe.")
-        return dataframes
-
-    # Búsqueda de archivos usando pathlib
-    archivos_csv = list(ruta_directorio.glob('ecommerce_*.csv')) # Devuelve una lista de objetos Path
-
-    if not archivos_csv:
-        logging.warning(f"No se encontraron archivos en: {ruta_directorio}")
-        return dataframes
-
-    for ruta_archivo in archivos_csv:
-        try:
-            # Manejo de excepciones en lectura
-            df = pd.read_csv(ruta_archivo, encoding='utf-8')
-            dataframes[ruta_archivo.name] = df  # Usamos el atributo del objeto Path para obtener el nombre del archivo
-            
-            ## Loggings con info básica del archivo
-            logging.info(f"Cargado exitosamente: {ruta_archivo.name} | Dimensiones: {df.shape}")
-            
-        except pd.errors.EmptyDataError:
-            logging.warning(f"El archivo está vacío y fue omitido: {ruta_archivo.name}")
-        except PermissionError:
-            logging.error(f"Sin permisos para leer el archivo: {ruta_archivo.name}")
-        except Exception as e:
-            logging.error(f"Error inesperado al leer {ruta_archivo.name}: {e}")
-
-    return dataframes
-
 def leer_csv_relevantes(ruta_directorio: Path, archivos_requeridos: list) -> dict:
     """
     Lee una lista de archivos CSV requeridos y retorna un diccionario de DataFrames.
