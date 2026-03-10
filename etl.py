@@ -1,0 +1,178 @@
+import pandas as pd
+from pathlib import Path
+import logging
+
+# Configuraciónde logging para registrar eventos
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("pipeline.log", encoding='utf-8', mode='w'),
+        logging.StreamHandler() # Muestra el log en la consola
+    ]
+)
+
+def leer_todos_csv(ruta_directorio: Path) -> dict:
+    """
+    Lee archivos CSV que coinciden con un patrón dentro de un directorio.
+    Retorna un diccionario de DataFrames.
+    """
+    dataframes = {}
+    
+    # Verificación de existencia de la ruta
+    if not ruta_directorio.exists():
+        logging.error(f"La ruta '{ruta_directorio}' no existe.")
+        return dataframes
+
+    # Búsqueda de archivos usando pathlib
+    archivos_csv = list(ruta_directorio.glob('ecommerce_*.csv')) # Devuelve una lista de objetos Path
+
+    if not archivos_csv:
+        logging.warning(f"No se encontraron archivos en: {ruta_directorio}")
+        return dataframes
+
+    for ruta_archivo in archivos_csv:
+        try:
+            # Manejo de excepciones en lectura
+            df = pd.read_csv(ruta_archivo, encoding='utf-8')
+            dataframes[ruta_archivo.name] = df  # Usamos el atributo del objeto Path para obtener el nombre del archivo
+            
+            ## Loggings con info básica del archivo
+            logging.info(f"Cargado exitosamente: {ruta_archivo.name} | Dimensiones: {df.shape}")
+            
+        except pd.errors.EmptyDataError:
+            logging.warning(f"El archivo está vacío y fue omitido: {ruta_archivo.name}")
+        except PermissionError:
+            logging.error(f"Sin permisos para leer el archivo: {ruta_archivo.name}")
+        except Exception as e:
+            logging.error(f"Error inesperado al leer {ruta_archivo.name}: {e}")
+
+    return dataframes
+
+def leer_csv_relevantes(ruta_directorio: Path, archivos_requeridos: list) -> dict:
+    """
+    Lee una lista de archivos CSV requeridos y retorna un diccionario de DataFrames.
+    Implementa validaciones de existencia y tamaño de archivo.
+    """
+    dataframes_relevantes = {}
+    
+    # Verificación de existencia de la ruta
+    if not ruta_directorio.exists():
+        logging.error(f"La ruta '{ruta_directorio}' no existe.")
+        return dataframes_relevantes
+
+    # Iteración de archivos requeridos
+    for nombre_archivo in archivos_requeridos:
+        # pathlib permite unir rutas dinámicamente usando el operador '/'
+        ruta_archivo = ruta_directorio / nombre_archivo
+        
+        # Validación de existencia
+        if not ruta_archivo.exists():
+            logging.warning(f"NO EXISTE ARCHIVO: {nombre_archivo} no fue encontrado en {ruta_directorio}")
+            continue
+            
+        # Validación de bytes
+        if ruta_archivo.stat().st_size == 0:
+            logging.warning(f"ARCHIVO VACÍO: {nombre_archivo} pesa 0 bytes. Se omite.")
+            continue
+
+        # Lectura del dataframe con manejo de excepciones
+        try:
+            df = pd.read_csv(ruta_archivo, encoding='utf-8')
+            dataframes_relevantes[ruta_archivo.name] = df
+            
+            logging.info(f"Cargado exitosamente: {ruta_archivo.name} | Dimensiones: {df.shape}")
+
+        except pd.errors.EmptyDataError:
+            logging.warning(f"El archivo no tiene columnas válidas: {ruta_archivo.name}")
+        except PermissionError:
+            logging.error(f"Sin permisos para leer: {ruta_archivo.name}")
+        except Exception as e:
+            logging.error(f"Error inesperado al leer {ruta_archivo.name}: {e}")
+
+    return dataframes_relevantes
+
+def exploracion_inicial(dataframes: dict):
+    """
+    Realiza una exploración inicial de los DataFrames cargados.
+    Imprime información básica y estadísticas descriptivas.
+    """
+    for nombre, df in dataframes.items():
+        logging.info(f"\nExplorando: {nombre}")
+        logging.info(f"Dimensiones: {df.shape}")
+        logging.info(f"Columnas: {df.columns.tolist()}")
+        logging.info(f"Primeras filas:\n{df.head(10)}")
+        logging.info(f"Tipos de datos:\n{df.dtypes}")
+        logging.info(f"Valores nulos por columna:\n{df.isnull().sum()}")
+        logging.info(f"Estadísticas descriptivas:\n{df.describe(include='all')}")
+
+def transformar_orders(df_orders: pd.DataFrame) -> pd.DataFrame:
+    # Implementar lógica de transformación para orders
+    return df_orders
+
+def transformar_customers(df_customers: pd.DataFrame) -> pd.DataFrame:
+    # Implementar lógica de transformación para customers
+    return df_customers
+
+def transformar_products(df_products: pd.DataFrame) -> pd.DataFrame:
+    # Implementar lógica de transformación para products
+    return df_products
+
+def transformar_order_items(df_order_items: pd.DataFrame) -> pd.DataFrame:
+    # Implementar lógica de transformación para order_items
+    return df_order_items
+
+def main():
+    # Definimos la ruta usando pathlib
+    ruta_data = Path('data/')
+    
+    # Definimos la lista de archivos que nos importan
+    archivos_requeridos = [
+        'ecommerce_orders.csv',
+        'ecommerce_order_items.csv',
+        'ecommerce_customers.csv',
+        'ecommerce_products.csv'
+    ]
+    
+    # EXTRAER
+    dataframes = leer_csv_relevantes(ruta_data, archivos_requeridos)
+
+    if not dataframes:
+        logging.error("ETL cancelado: No se cargaron datos.")
+        return
+
+    # Exploración opcional de los dataframes cargados
+    # exploracion_inicial(dataframes)
+    
+    # TRASNFORMAR
+    # Diccionario que mapea "Nombre del archivo" -> "Función que lo transforma"
+    rutas_transformacion = {
+        'ecommerce_orders.csv': transformar_orders,
+        'ecommerce_customers.csv': transformar_customers,
+        'ecommerce_products.csv': transformar_products,
+        'ecommerce_order_items.csv': transformar_order_items
+    }
+    
+    dataframes_transformados = {}
+    
+    # Iteramos sobre los dataframes que ya tenemos cargados y transformamos
+    for nombre_archivo, df in dataframes.items():
+        # Verificamos si existe una función de transformación para este archivo
+        if nombre_archivo in rutas_transformacion:
+            # Obtenemos la función del diccionario y la ejecutamos en su df correspondiente
+            funcion_transformadora = rutas_transformacion[nombre_archivo]
+            df_transformado = funcion_transformadora(df)
+            dataframes_transformados[nombre_archivo] = df_transformado
+            logging.info(f"Transformación exitosa para {nombre_archivo}")
+        else:
+            # Si no, conservamos el original
+            logging.info(f"Sin transformación para {nombre_archivo}. Se mantiene original.")
+            dataframes_transformados[nombre_archivo] = df
+
+    logging.info("Fase de Transformación finalizada.")
+    
+    # CARGA
+    # Aqui iría la lógica para guardar los dataframes_transformados en una Base de Datos o Data Lake.
+
+if __name__ == "__main__":
+    main()
