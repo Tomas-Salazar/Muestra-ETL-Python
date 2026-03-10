@@ -106,9 +106,40 @@ def exploracion_inicial(dataframes: dict):
         logging.info(f"Valores nulos por columna:\n{df.isnull().sum()}")
         logging.info(f"Estadísticas descriptivas:\n{df.describe(include='all')}")
 
-def transformar_orders(df_orders: pd.DataFrame) -> pd.DataFrame:
-    # Implementar lógica de transformación para orders
-    return df_orders
+def transformar_orders(df: pd.DataFrame) -> pd.DataFrame:
+    """Aplica reglas de negocio y limpieza al df de Orders."""
+    logging.info("Iniciando transformación de orders...")
+    df_clean = df.copy()
+    
+    # Casteo de fechas
+    if 'order_date' in df_clean.columns:
+        df_clean['order_date'] = pd.to_datetime(df_clean['order_date'], errors='coerce')
+    
+    # Si hay IDs duplicados, quedarse con el más reciente
+    if 'order_id' in df_clean.columns:
+        df_clean = df_clean.sort_values('order_date').drop_duplicates(subset=['order_id'], keep='last')
+    
+    # Manejo de estado nulo
+    if 'status' in df_clean.columns:
+        df_clean['status'] = df_clean['status'].fillna('UNKNOWN').str.upper() # Nulos como unknown y estandarizamos a mayúsculas
+
+    # Manejo de promotion_id nulo
+    if 'promotion_id' in df_clean.columns:
+        df_clean['promotion_id'] = df_clean['promotion_id'].fillna(0).astype(int) # Se rellena con 0 y se convierte a entero para evitar problemas de lectura
+        
+    # Manejo de notas nulas
+    if 'notes' in df_clean.columns:
+        df_clean['notes'] = df_clean['notes'].fillna('Sin notas') # Rellenamos con un texto genérico
+    
+    # Tipado estricto para columnas numéricas
+    columnas_numericas = ['subtotal', 'shipping_cost', 'tax_amount', 'total_amount']
+    
+    for col in columnas_numericas:
+        if col in df_clean.columns:
+            df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce').fillna(0.0)
+
+    logging.info(f"Transformación de orders completada.")
+    return df_clean
 
 def transformar_customers(df_customers: pd.DataFrame) -> pd.DataFrame:
     # Implementar lógica de transformación para customers
