@@ -2,16 +2,7 @@ import pandas as pd
 from pathlib import Path
 import logging
 
-# Configuraciónde logging para registrar eventos
-logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("pipeline.log", encoding='utf-8', mode='w'),
-        logging.StreamHandler() # Muestra el log en la consola
-    ]
-)
-
+# EXTRACCIÓN / INGESTA (CAPA BRONZE)
 def leer_csv_relevantes(ruta_directorio: Path, archivos_requeridos: list) -> dict:
     """
     Lee una lista de archivos CSV requeridos y retorna un diccionario de DataFrames.
@@ -44,7 +35,7 @@ def leer_csv_relevantes(ruta_directorio: Path, archivos_requeridos: list) -> dic
             df = pd.read_csv(ruta_archivo, encoding='utf-8')
             dataframes_relevantes[ruta_archivo.name] = df
             
-            logging.info(f"Cargado exitosamente: {ruta_archivo.name} | Dimensiones: {df.shape}")
+            logging.info(f"Cargado exitosamente (Bronze): {ruta_archivo.name} | Dimensiones: {df.shape}")
 
         except pd.errors.EmptyDataError:
             logging.warning(f"El archivo no tiene columnas válidas: {ruta_archivo.name}")
@@ -55,23 +46,11 @@ def leer_csv_relevantes(ruta_directorio: Path, archivos_requeridos: list) -> dic
 
     return dataframes_relevantes
 
-def exploracion_inicial(dataframes: dict):
-    """
-    Realiza una exploración inicial de los DataFrames cargados.
-    Imprime información básica y estadísticas descriptivas.
-    """
-    for nombre, df in dataframes.items():
-        logging.info(f"\nExplorando: {nombre}")
-        logging.info(f"Dimensiones: {df.shape}")
-        logging.info(f"Columnas: {df.columns.tolist()}")
-        logging.info(f"Primeras filas:\n{df.head(10)}")
-        logging.info(f"Tipos de datos:\n{df.dtypes}")
-        logging.info(f"Valores nulos por columna:\n{df.isnull().sum()}")
-        logging.info(f"Estadísticas descriptivas:\n{df.describe(include='all')}")
 
+# TRANSFORMACIÓN / ENRIQUECIMIENTO (CAPA SILVER)
 def transformar_orders(df: pd.DataFrame) -> pd.DataFrame:
     """Aplica reglas de negocio y limpieza al df de Orders."""
-    logging.info("Iniciando transformación de orders...")
+    logging.info("Iniciando transformación (Silver) de orders")
     df_clean = df.copy()
     
     # Casteo de fechas
@@ -116,35 +95,138 @@ def transformar_order_items(df_order_items: pd.DataFrame) -> pd.DataFrame:
     # Implementar lógica de transformación para order_items
     return df_order_items
 
+def transformar_categories(df_categories: pd.DataFrame) -> pd.DataFrame:
+    # Implementar lógica de transformación para categories
+    return df_categories
+
+
+# MODELADO ANALÍTICO (CAPA GOLD / DATA MARTS)
+def crear_tabla_gold_clientes(df_orders: pd.DataFrame, df_customers: pd.DataFrame) -> pd.DataFrame:
+    """Cruza órdenes y clientes para ver quién gastó más."""
+    logging.info("Creando tabla Gold: Top Clientes")
+    
+    # Inner join entre clientes y órdenes para obtener el total gastado por cliente
+    df_join = pd.merge(
+        df_customers[['customer_id', 'first_name', 'last_name']], 
+        df_orders[['customer_id', 'total_amount', 'order_id']], 
+        on='customer_id', 
+        how='left'  # Usamos left join para incluir clientes sin órdenes
+    )
+    df_join['total_amount'] = df_join['total_amount'].fillna(0.0)   # Clientes sin órdenes tendrán total_amount como 0.0
+    
+    # Agrupamos por cliente para sumar el total gastado y contar la cantidad de órdenes
+    df_gold = df_join.groupby(['customer_id', 'first_name', 'last_name']).agg(
+        total_gastado=('total_amount', 'sum'),
+        cantidad_ordenes=('order_id', 'count')
+    ).reset_index().sort_values(by='total_gastado', ascending=False)
+    
+    return df_gold
+
+def crear_tabla_gold_productos_categoria(df_order_items: pd.DataFrame, df_products: pd.DataFrame, df_categories: pd.DataFrame) -> pd.DataFrame:
+    """Cruza items y productos para obtener los más vendidos por categoría."""
+    logging.info("Creando tabla Gold: Productos más vendidos por categoría")
+    
+    df_join = pd.merge(
+        df_order_items[['product_id', 'quantity', 'subtotal']], 
+        df_products[['product_id', 'product_name', 'category_id']], 
+        on='product_id', 
+        how='inner'
+    )
+    
+    # Agrupamos para saber cuánto se vendió de cada producto dentro de su categoría
+    df_gold = df_join.groupby(['category_id', 'product_id', 'product_name']).agg(
+        unidades_vendidas=('quantity', 'sum'),
+        ingresos_totales=('subtotal', 'sum')
+    ).reset_index()
+    
+    # Ordenamos primero por categoría, y luego por unidades vendidas (de mayor a menor)
+    df_gold = df_gold.sort_values(by=['category_id', 'unidades_vendidas'], ascending=[True, False])
+    
+    # Agregamos el nombre de la categoría
+    df_gold = pd.merge(
+        df_gold,
+        df_categories[['category_id', 'category_name']],
+        on='category_id',
+        how='inner'
+    )
+    
+    # Ordenamos y reorganizamos los datos
+    df_gold = df_gold.sort_values(by=['category_name', 'unidades_vendidas'], ascending=[True, False])
+    
+    columnas_finales = ['category_id', 'category_name', 'product_id', 'product_name', 'unidades_vendidas', 'ingresos_totales']
+    df_gold = df_gold[columnas_finales]
+    
+    return df_gold
+
+
+# CARGA (LOAD)
+def cargar_datos(dataframes: dict, ruta_destino: Path):
+    """
+    Guarda los DataFrames transformados en la carpeta de destino en formato Parquet.
+    """
+    # Verificamos si la carpeta existe
+    if not ruta_destino.exists():
+        ruta_destino.mkdir(parents=True, exist_ok=True)
+        logging.info(f"Directorio creado: {ruta_destino}")
+
+    for nombre_archivo, df in dataframes.items():
+        # Extraemos el nombre base sin la extensión y guardamos
+        nombre_base = Path(nombre_archivo).stem
+        
+        ruta_parquet = ruta_destino / f"{nombre_base}.parquet"
+        try:
+            df.to_parquet(ruta_parquet, index=False)
+            logging.info(f"Carga exitosa (Parquet): {ruta_parquet}")
+        except Exception as e:
+            logging.error(f"Error al guardar {ruta_parquet} en Parquet: {e}")
+            
+        # Guardado en formato CSV (Opcional)
+        # ruta_csv = ruta_destino / f"{nombre_base}.csv"
+        # df.to_csv(ruta_csv, index=False, encoding='utf-8')
+        # logging.info(f"Carga exitosa (CSV): {ruta_csv}")
+
+
+# EJECUCIÓN PRINCIPAL
 def main():
-    # Definimos la ruta usando pathlib
-    ruta_data = Path('data/')
+    # Configuraciónde logging para registrar eventos
+    logging.basicConfig(
+        level=logging.INFO, 
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler("pipeline.log", encoding='utf-8', mode='w'), # Guarda el log en un .log
+            logging.StreamHandler() # Muestra el log en la consola
+        ]
+    )
+    
+    # Definimos las rutas usando pathlib
+    ruta_origen = Path('data/')
+    ruta_destino = Path('output/')
     
     # Definimos la lista de archivos que nos importan
     archivos_requeridos = [
         'ecommerce_orders.csv',
         'ecommerce_order_items.csv',
         'ecommerce_customers.csv',
-        'ecommerce_products.csv'
+        'ecommerce_products.csv',
+        'ecommerce_categories.csv'
     ]
     
     # EXTRAER
-    dataframes = leer_csv_relevantes(ruta_data, archivos_requeridos)
-
+    logging.info("Iniciando extracción de datos, capa Bronze")
+    dataframes = leer_csv_relevantes(ruta_origen, archivos_requeridos)
     if not dataframes:
         logging.error("ETL cancelado: No se cargaron datos.")
         return
-
-    # Exploración opcional de los dataframes cargados
-    # exploracion_inicial(dataframes)
     
     # TRASNFORMAR
+    logging.info("Iniciando transformaciones para capa Silver")
     # Diccionario que mapea "Nombre del archivo" -> "Función que lo transforma"
     rutas_transformacion = {
         'ecommerce_orders.csv': transformar_orders,
         'ecommerce_customers.csv': transformar_customers,
         'ecommerce_products.csv': transformar_products,
-        'ecommerce_order_items.csv': transformar_order_items
+        'ecommerce_order_items.csv': transformar_order_items,
+        'ecommerce_categories.csv': transformar_categories
     }
     
     dataframes_transformados = {}
@@ -157,16 +239,37 @@ def main():
             funcion_transformadora = rutas_transformacion[nombre_archivo]
             df_transformado = funcion_transformadora(df)
             dataframes_transformados[nombre_archivo] = df_transformado
-            logging.info(f"Transformación exitosa para {nombre_archivo}")
+            logging.info(f"Transformación (Silver) exitosa para {nombre_archivo}")
         else:
             # Si no, conservamos el original
-            logging.info(f"Sin transformación para {nombre_archivo}. Se mantiene original.")
             dataframes_transformados[nombre_archivo] = df
-
-    logging.info("Fase de Transformación finalizada.")
     
-    # CARGA
-    # Aqui iría la lógica para guardar los dataframes_transformados en una Base de Datos o Data Lake.
+    
+    # MODELAR
+    logging.info("Iniciando validaciones para capa Gold")
+    # Validamos que las tablas existan antes de intentar cruzarlas
+    if 'ecommerce_orders.csv' in dataframes_transformados and 'ecommerce_customers.csv' in dataframes_transformados:
+        df_gold_clientes = crear_tabla_gold_clientes(
+            dataframes_transformados['ecommerce_orders.csv'], 
+            dataframes_transformados['ecommerce_customers.csv']
+        )
+        dataframes_transformados['gold_top_clientes'] = df_gold_clientes
+
+    if 'ecommerce_order_items.csv' in dataframes_transformados and 'ecommerce_products.csv' in dataframes_transformados and 'ecommerce_categories.csv' in dataframes_transformados:
+        df_gold_productos = crear_tabla_gold_productos_categoria(
+            dataframes_transformados['ecommerce_order_items.csv'], 
+            dataframes_transformados['ecommerce_products.csv'],
+            dataframes_transformados['ecommerce_categories.csv']
+        )
+        dataframes_transformados['gold_top_productos_categoria'] = df_gold_productos
+
+
+    # CARGAR
+    logging.info("Iniciando fase de Carga")
+    # Cargamos/subimos los dataframes transformados a nuestro destino final (puede ser un data lake, un data warehouse, o simplemente una carpeta local)
+    cargar_datos(dataframes_transformados, ruta_destino)
+    
+    logging.info("Pipeline ETL finalizado exitosamente.")
 
 if __name__ == "__main__":
     main()
