@@ -1,0 +1,2 @@
+Este es un pequeño ETL in-memory con fines demostrativos.
+En un entorno productivo con grandes volúmenes, la lógica de transformación se delegaría a un motor distribuido como Spark o se usaría procesamiento por chunks.
